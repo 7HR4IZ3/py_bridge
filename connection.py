@@ -52,6 +52,7 @@ class NodeBridgeConnection(BaseBridgeConnection):
             return self.__handle_let
         if name == "await_":
             return self.__handle_await
+        if name == "_require": name = "require"
         return super().__getattr__(name)
 
     def __handle_let(self, *keys, **values):

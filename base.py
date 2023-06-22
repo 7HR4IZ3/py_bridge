@@ -1,6 +1,7 @@
 import os
 import builtins
 import queue
+import traceback
 
 from types import NoneType
 from pathlib import Path
@@ -11,7 +12,7 @@ from .transporters import *
 from .proxy import *
 from .connection import *
 
-from .utils import generate_random_id, get_decoder, get_encoder
+from .utils import generate_random_id, get_decoder, get_encoder, ThreadSafeQueue
 
 scripts_path = os.path.join(Path(__file__).parent.absolute(), "scripts")
 
@@ -25,7 +26,7 @@ class BaseHandler:
     def __init__(self):
         self.proxies = dict()
 
-        self.queue = queue.Queue()
+        self.queue = ThreadSafeQueue()
         self.timeout = 5
 
         self.message_handlers = dict()
@@ -88,67 +89,6 @@ class BaseHandler:
             )
         return wrapper
 
-    def format_arg(self, arg):
-        ret = []
-
-        # elif isinstance(arg, JsObject):
-        #     ret.append(arg.code)
-        if isinstance(arg, BridgeChain):
-            ret.append(arg._statement())
-        elif isinstance(arg, BaseBridgeProxy):
-            ret.append(f"client.get_proxy_object('{arg.__data['location']}')")
-        # elif isinstance(arg, JsClass):
-        #     item = self.state.proxy_object(arg)
-        #     ret.append("client.__get_result("+item+")")
-        elif isinstance(arg, list):
-            ret.append("[")
-            [ret.append(x) for x in self.format_args(arg)]
-            ret.append("]")
-        elif isinstance(arg, tuple):
-            ret.append("(")
-            [ret.append(x) for x in self.format_args(arg)]
-            ret.append(")")
-        elif isinstance(arg, set):
-            ret.append("{")
-            [ret.append(x) for x in self.format_args(arg)]
-            ret.append("}")
-        elif isinstance(arg, dict):
-            ret.append("{")
-            for k, v in arg.items():
-                [ret.append(x) for x in self.format_arg(k)]
-                ret.append(":")
-                [ret.append(x) for x in self.format_arg(v)]
-                ret.append(",")
-            if len(ret) > 1 and ret[-1] == ",":
-                ret.pop()
-            ret.append("}")
-        # elif hasattr(arg, "to_js"):
-        #     [ret.append(x) for x in arg.to_js(self, arg)]
-        elif arg is None:
-            ret.append("null")
-        else:
-            if not isinstance(arg, (int, str, dict, set, tuple, bool, float)):
-                item = self.generate_proxy(arg)
-                ret.append("client.generate_proxy(" + item + ")")
-            else:
-                val = repr(arg)
-                ret.append(f'{val}')
-        return ret
-
-    def format_args(self, args):
-        ret = []
-
-        for item in args[:-1]:
-            [ret.append(x) for x in self.format_arg(item)]
-            ret.append(",")
-
-        if len(args) > 0:
-            [ret.append(x) for x in self.format_arg(args[-1])]
-
-        if ret and ret[-1] == ",":
-            ret.pop()
-        return ret
-
     def send(self, raw=False, **data):
         self.transporter.send(data, raw)
 
@@ -173,22 +113,24 @@ class BaseHandler:
         self.send(**data)
 
         # print("Waiting for response...")
-
         response = self.queue.get(timeout=self.timeout)
         # print("Recieved response...")
         self.queue.task_done()
         if isinstance(response, Exception):
-            raise response
+            raise response from None
         return response
 
-    def process_command(self, req):
+    def process_command(self, req, handler=None):
         func = getattr(self, "handle_" + req['action'])
 
         if (not func):
             raise Exception("Invalid action.")
-        ret = func(req)
-
-        return {"response": ret}
+        
+        try:
+            ret = func(req)
+            return {"response": ret}
+        except BaseException as e:
+            return { "error": "\n".join(traceback.format_exception(e)) }
 
     def handle_attribute(self, req):
         target = getattr(self.obj, req["item"], UNDEFINED)
@@ -224,6 +166,12 @@ class BaseHandler:
             ret = getattr(ret, item)
         return ret
 
+    def handle_get_proxy_repr(self, req):
+        ret = self.get_proxy(req["location"])
+        if req.get("string") is True:
+            return str(ret)
+        return str(repr(ret))
+
     def handle_get_stack_attribute(self, req):
         stack = req.get("stack") or []
         ret = self.get_proxy(req["location"])
@@ -241,6 +189,9 @@ class BaseHandler:
     def handle_set_stack_attribute(self, req):
         stack = req["stack"]
         ret = self.get_proxy(req["location"])
+
+        if not len(stack): return False
+
         for item in stack[:-1]:
             ret = getattr(ret, item)
         setattr(ret, stack[-1], req["value"])

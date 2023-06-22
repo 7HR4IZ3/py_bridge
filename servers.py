@@ -1,5 +1,6 @@
 import os
 import sys
+import inspect
 from types import ModuleType
 from pathlib import Path
 
@@ -91,17 +92,18 @@ class BaseBridgeServer(BaseHandler):
     import_alias = 'bridge'
     default_transporter = SocketBridgeTransporter
 
-    def __init__(self, transporter=None, keep_alive=False, timeout=5):
+    def __init__(self, transporter=None, keep_alive=False, timeout=5, **kw):
+        self.kwargs = kw
         self.transporter = transporter
 
         if not self.transporter:
             self.transporter = self.default_transporter()
 
+        super().__init__()
         self.timeout = timeout
 
-        self.__keep_alive = keep_alive
+        self.keep_alive = keep_alive
 
-        super().__init__()
         self.formatters = {
             # "number": lambda x: int(x['value']),
             # "float": lambda x: float(x['value']),
@@ -130,9 +132,16 @@ class BaseBridgeServer(BaseHandler):
     def import_lib(self, name):
         return
 
-    def setup(self, *a, name=None, **k):
+    def __getattr(self, name):
+        return getattr(self.conn, name)
+
+    def setup(self, *a, name=None, globals=False, **k):
         conn = self.start(*a, **k)
         self.setup_imports(name or self.import_alias)
+        if globals:
+            frame = inspect.stack()[-1].frame
+            frame.f_globals["console"] = self.conn.console
+            print(frame.f_globals)
         return conn
 
     def start(self, bridge=None, mode="auto_eval"):
@@ -187,11 +196,11 @@ class BaseBridgeServer(BaseHandler):
     def __exit__(self, *a):
         self.stop()
 
-    def __keep_alive__(self):
-        self.__keep_alive = True
+    # def __keep_alive__(self, value=True):
+    #     self.keep_alive = value
 
     def stop(self, force=False):
-        if not force and self.__keep_alive:
+        if not force and self.keep_alive:
             return
         self.transporter.stop()
         # self.bridge.close()
@@ -199,13 +208,16 @@ class BaseBridgeServer(BaseHandler):
     def __del__(self):
         self.stop()
 
-
 class NodeBridgeServer(BaseBridgeServer):
     proxy = NodeBridgeProxy
     connection = NodeBridgeConnection
 
-    args = ["node", os.path.join(scripts_path, "js_bridge_script.js")]
+    args = [os.path.join(scripts_path, "js_bridge_script.js")]
     import_alias = 'nodejs'
+
+    def __init__(self, *args, command="node", **kw):
+        super().__init__(*args, **kw)
+        self.cmd = command
 
     def import_lib(self, name):
         if name == "global":
@@ -236,10 +248,15 @@ class NodeBridgeServer(BaseBridgeServer):
         return ret
 
 
-def nodejs(host='127.0.0.1', port=7000, **kw):
-    return NodeBridgeServer(
+def nodejs(host='127.0.0.1', port=7000, return_server=False, **kw):
+    server = NodeBridgeServer(
         SocketBridgeTransporter(host, port), **kw
-    ).setup()
+    )
+    connection = server.setup()
+
+    if return_server:
+        return server, connection
+    return connection
 
 
 class BrowserBridgeServer(NodeBridgeServer):

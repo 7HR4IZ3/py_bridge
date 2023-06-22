@@ -11,13 +11,7 @@ import time
 from tempfile import NamedTemporaryFile
 from subprocess import Popen
 
-from .utils import task, process, daemon_task
-
-
-try:
-    loop = asyncio.get_event_loop()
-except RuntimeError:
-    loop = asyncio.new_event_loop()
+from .utils import task, process, daemon_task, ThreadSafeQueue
 
 try:
     import websockets
@@ -49,10 +43,14 @@ class BaseBridgeTransporter:
         )
 
     def decode(self, data, raw=False):
-        return (
-            json.loads(data) if raw
-            else json.loads(data, cls=self.server.decoder)
-        )
+        try:
+            return (
+                json.loads(data) if raw
+                else json.loads(data, cls=self.server.decoder)
+            )
+        except json.decoder.JSONDecodeError as e:
+            print(e, data)
+            return None
 
     def send(self, data):
         pass
@@ -63,14 +61,14 @@ class BaseBridgeTransporter:
 
 class ProcessBasedTransporter(BaseBridgeTransporter):
 
-    @task
+    @daemon_task
     def start_process(self, server):
-        # print(os.getcwd())
         args, kwargs = self.get_setup_args(server.args)
-        self.process = Popen(args, cwd=os.getcwd(), **kwargs)
+        self.process = Popen([server.cmd, *args], cwd=os.getcwd(), **kwargs)
 
     def stop_process(self):
-        self.process.terminate()
+        self.process.kill()
+        # self.process.terminate()
 
     def start(self, on_message, server):
         self.start_process(server)
@@ -113,7 +111,7 @@ class StdIOBridgeTransporter(ProcessBasedTransporter):
         # self.stdout.truncate()
         # self.stdout.seek(0)
 
-    @task
+    @daemon_task
     def start_listening(self, mode="listening"):
         if mode == "listening":
             target = self.stdin
@@ -144,7 +142,9 @@ class SocketBridgeTransporter(ProcessBasedTransporter):
         self.host = host
         self.port = port
         self.socket = None
+        self.listening = threading.Event()
         self.tasks = []
+        self.listening.set()
 
     def get_setup_args(self, args, **kw):
         return args + [
@@ -154,23 +154,34 @@ class SocketBridgeTransporter(ProcessBasedTransporter):
         ], {}
 
     def start_listening(self, cond):
-        while cond() is None:
+        while self.listening.is_set() and (cond() is None):
+            data = b""
+
             try:
-                data = self.socket.recv(1024)
-            except Exception:
+                data = self.socket.recv(1024).decode("utf-8")
+                splits = data.split(":::")
+
+                TOTAL_SIZE = int(splits[0])
+                data = ":::".join(splits[1:])
+
+                while len(data) < TOTAL_SIZE:
+                    data += self.socket.recv(1024).decode("utf-8")
+            except ConnectionResetError:
+                break
+            except Exception as e:
+                print(repr(e))
                 break
 
             if data == b"":
                 break
 
             if data:
-                data = data.decode("utf-8")
                 # print("[PY] Recieved:", data)
-                # termcolor.cprint(f"[PY -> JS] Recieved: {data}", color="green")
-                for item in data.split("\n"):
+                # termcolor.cprint(f"[JS -> PY] Recieved: {data}", color="green")
+                for item in data.split(":-:"):
                     item = item.strip()
                     if item:
-                        self.on_message(self.decode(item))
+                        daemon_task(self.on_message)(self.decode(item))
 
     def send(self, data, raw=False):
         data["response_type"] = "bridge_response"
@@ -178,8 +189,9 @@ class SocketBridgeTransporter(ProcessBasedTransporter):
         data = self.encode(data, raw)
         # print("[Py] Sent", data)
         # termcolor.cprint(f"[PY -> JS] Sent: {data}", color="red")
+        data = f"{len(data)}:::{data}:-:".encode("utf-8")
         if self.socket:
-            sent = self.socket.send(data.encode('utf-8') + b"\n")
+            sent = self.socket.send(data)
             if sent == 0:
                 pass
         else:
@@ -211,7 +223,7 @@ class SocketBridgeTransporter(ProcessBasedTransporter):
         for item in self.tasks:
             self.send(item)
 
-        task(self.start_listening)(lambda: self.process.poll())
+        (task if self.server.keep_alive else daemon_task)(self.start_listening)(lambda: self.process.poll())
 
     def start_client(self, on_message, options=None, server=None, queue=None):
         options = options or {}
@@ -230,6 +242,14 @@ class SocketBridgeTransporter(ProcessBasedTransporter):
 
         self.start_listening(lambda: None)
 
+    def stop(self):
+        if getattr(self, "sock_server", None):
+            self.sock_server.close()
+        if getattr(self, "socket", None):
+            self.socket.close()
+        self.listening.clear()
+        return super().stop()
+
 
 class JSBridgeTransporter(BaseBridgeTransporter):
 
@@ -243,7 +263,7 @@ class JSBridgeTransporter(BaseBridgeTransporter):
         self.last_socket = None
         self.started_listening = False
         self.timeout = timeout
-        self.connQ = queue.Queue()
+        self.connQ = ThreadSafeQueue()
         self.CONNECTION_LIST = []
         self.MAP = {}
         self.SOCKET_MAP = {}
@@ -332,7 +352,7 @@ class JSBridgeTransporter(BaseBridgeTransporter):
         else:
             self.tasks.append(data)
 
-    @daemon_task
+    @task
     def setup_app(self):
         from gevent import pywsgi
         from geventwebsocket.handler import WebSocketHandler
@@ -445,7 +465,7 @@ class SocketIOBridgeTransporter(BaseBridgeTransporter):
         else:
             self.tasks.append(data)
 
-    @task
+    @daemon_task
     def setup_app(self):
         from socketio import Server, WSGIApp
         from gevent import pywsgi

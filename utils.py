@@ -1,7 +1,8 @@
 import json
 import sys
 import asyncio
-from threading import Thread
+import queue
+from threading import Thread, Lock
 from multiprocessing import Process
 from functools import wraps
 from random import randint
@@ -64,7 +65,7 @@ def get_encoder(server):
                 obj = obj.__serialize_bridge__(server)
 
             try:
-                return super().encode(obj)
+                return super().default(obj)
             except:
                 return server.generate_proxy(obj)
     return JSONEncoder
@@ -123,3 +124,13 @@ def load_module(target, e=None, catch_errors=True, **namespace):
 
 def generate_random_id(size=20):
     return "".join([str(randint(0, 9)) for i in range(size)])
+
+
+class ThreadSafeQueue(queue.Queue):
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.lock = Lock()
+
+    def get(self, *a, **kw):
+        with self.lock:
+            return super().get(*a, **kw)

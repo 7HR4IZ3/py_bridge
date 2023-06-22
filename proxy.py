@@ -1,3 +1,5 @@
+import asyncio
+
 
 class BaseBridgeProxy:
     def __init__(self, server, data):
@@ -15,10 +17,10 @@ class BaseBridgeProxy:
         ))
 
     def __dir__(self):
-        return self.__server__.recieve(
+        return list(map(str, self.__server__.recieve(
             action="get_proxy_attributes",
             location=self.__data__['location']
-        )
+        )))
 
     def __call__(self, *args, **kwargs):
         return self.__server__.recieve(
@@ -63,6 +65,15 @@ class BaseBridgeProxy:
     def __str__(self):
         return self.__cast__(str)
 
+    def __await__(self):
+        async def _():
+            result = self.__server__.recieve(
+                action="await_proxy",
+                location=self.__data__['location']
+            )
+            return result
+        return _().__await__()
+
     # def __del__(self):
     #     try:
     #         return self.__server__.recieve(
@@ -72,18 +83,34 @@ class BaseBridgeProxy:
     #     except Exception:
     #         pass
 
-    # def __bool__(self):
-    #     return self.__cast__(bool)
+    def __bool__(self):
+        return self.__cast__(bool)
 
-    # def __int__(self):
-    #     return self.__cast__(int)
+    def __int__(self):
+        return self.__cast__(int)
 
-    # def __len__(self):
-    #     length = self.length
-    #     if length is not None:
-    #         return length.__cast__()
-    #     return 0
+    def __len__(self):
+        try:
+            length = self.length
+            if length is not None: return length
+        except: pass
+        return 0
 
+    def __repr__(self):
+        return self.__server__.recieve(
+            action="get_proxy_repr",
+            location=self.__data__['location']
+        )
+    
+    def __str__(self):
+        return self.__server__.recieve(
+            action="get_proxy_repr",
+            location=self.__data__['location'],
+            string=True
+        )
+
+    def __lt__(self, other):
+        return None
 
 class NodeBridgeProxy(BaseBridgeProxy):
     def __getattr__(self, name):

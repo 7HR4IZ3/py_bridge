@@ -1,7 +1,7 @@
 import queue
 from .transporters import transporters
 from .base import BaseHandler
-from .utils import load_module
+from .utils import load_module, ThreadSafeQueue
 
 
 class PyBridgeClient(BaseHandler):
@@ -18,7 +18,7 @@ class PyBridgeClient(BaseHandler):
 
         self.transporter = transporter()
 
-        self.transporter_queue = queue.Queue()
+        self.transporter_queue = ThreadSafeQueue()
 
         self.transporter.start_client(
             self.on_message,
