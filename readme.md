@@ -27,22 +27,25 @@ node_server = NodeBridgeServer(
     SocketBridgeTransporter(),
     keep_alive=False
 )
-csharp_server = CSharpBridgeServer()
-java_server = JavaBridgeServer()
-golang_server = GoLangBridgeServer()
+
+# Only nodejs supported for now.
+
+# csharp_server = CSharpBridgeServer()
+# java_server = JavaBridgeServer()
+# golang_server = GoLangBridgeServer()
 
 with node_server.setup() as node:
   node.console.log("Hello World")
 
-with csharp_server.setup() as csharp:
-    csharp.Console.WriteLn("Hello From Csharp")
+# with csharp_server.setup() as csharp:
+#     csharp.Console.WriteLn("Hello From Csharp")
 
-with java_server.setup() as java:
-    java.System.Console.WriteLn("Hello From Java")
+# with java_server.setup() as java:
+#     java.System.Console.WriteLn("Hello From Java")
 
-with golang_server.setup() as go:
-    go.import_("fmt")
-    go.fmt.PrintLn("Hello From Golang")
+# with golang_server.setup() as go:
+#     go.import_("fmt")
+#     go.fmt.PrintLn("Hello From Golang")
 ```
 
 In this example, we are using the Node.js server to communicate with JavaScript, and the CSharp, Java, and Golang servers to communicate with their respective programming languages. The `keep_alive` parameter is set to `False`, meaning that the connection will be closed after the script is executed.
