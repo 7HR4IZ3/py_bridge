@@ -6,7 +6,7 @@ The Python to JavaScript Bridge is a library that allows you to communicate betw
 
 - Easy integration with multiple programming languages.
 - Simplifies communication between programming languages.
-- Supports different transport protocols such as sockets.
+- Supports different transport protocols such as sockets, stdio, websockets.
 
 ## Installation
 
